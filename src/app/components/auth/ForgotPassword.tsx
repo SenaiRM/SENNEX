@@ -3,6 +3,10 @@ import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { toast } from 'sonner';
+import logo from '../../assets/logo';
+import { validateEmail } from '../../lib/validation';
+import { STORAGE_KEYS, RESET_EMAIL_SESSION_KEY } from '../../lib/storage';
+import { UserRecord } from '../../types';
 
 interface ForgotPasswordProps {
   onNavigate: (route: string) => void;
@@ -15,38 +19,35 @@ export const ForgotPassword: React.FC<ForgotPasswordProps> = ({ onNavigate }) =>
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!email) {
-      setError('Preencha todos os campos obrigatórios');
+    const emailError = validateEmail(email);
+    if (emailError) {
+      setError(emailError);
       return;
     }
 
-    if (!/\S+@\S+\.\S+/.test(email)) {
-      setError('E-mail inválido');
-      return;
-    }
-
-    const users = JSON.parse(localStorage.getItem('sennex_users') || '[]');
-    const userExists = users.find((u: any) => u.email === email);
+    const users: UserRecord[] = JSON.parse(localStorage.getItem(STORAGE_KEYS.USERS) || '[]');
+    const userExists = users.find((u) => u.email === email);
 
     if (!userExists) {
       toast.error('E-mail não encontrado');
       return;
     }
 
+    sessionStorage.setItem(RESET_EMAIL_SESSION_KEY, email);
     toast.success('Instruções para recuperação de senha enviadas para o e-mail informado');
     setTimeout(() => onNavigate('reset-password'), 1500);
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-950 flex items-center justify-center p-4">
       <Card className="w-full max-w-md">
         <div className="text-center mb-8">
           <img
-            src="/src/imports/Gemini_Generated_Image_91hvjp91hvjp91hv-removebg-preview.png"
+            src={logo}
             alt="SENNEX Logo"
             className="h-40 w-auto mx-auto mb-4"
           />
-          <h2 className="text-xl font-bold text-gray-900">Recuperar Senha</h2>
+          <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">Recuperar Senha</h2>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -70,7 +71,7 @@ export const ForgotPassword: React.FC<ForgotPasswordProps> = ({ onNavigate }) =>
         <div className="mt-6 text-center">
           <button
             onClick={() => onNavigate('login')}
-            className="text-blue-600 hover:text-blue-700 font-medium"
+            className="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 font-medium"
           >
             Voltar para o login
           </button>

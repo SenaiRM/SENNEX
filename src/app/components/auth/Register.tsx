@@ -4,9 +4,18 @@ import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { toast } from 'sonner';
+import logo from '../../assets/logo';
+import { validateEmail, validateRequired, validatePassword, validatePasswordsMatch } from '../../lib/validation';
 
 interface RegisterProps {
   onNavigate: (route: string) => void;
+}
+
+interface RegisterErrors {
+  name?: string;
+  email?: string;
+  password?: string;
+  confirmPassword?: string;
 }
 
 export const Register: React.FC<RegisterProps> = ({ onNavigate }) => {
@@ -14,26 +23,23 @@ export const Register: React.FC<RegisterProps> = ({ onNavigate }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [errors, setErrors] = useState<any>({});
+  const [errors, setErrors] = useState<RegisterErrors>({});
   const { register } = useAuth();
 
   const validate = () => {
-    const newErrors: any = {};
+    const newErrors: RegisterErrors = {};
 
-    if (!name) newErrors.name = 'Preencha todos os campos obrigatórios';
-    if (!email) {
-      newErrors.email = 'Preencha todos os campos obrigatórios';
-    } else if (!/\S+@\S+\.\S+/.test(email)) {
-      newErrors.email = 'E-mail inválido';
-    }
-    if (!password) {
-      newErrors.password = 'Preencha todos os campos obrigatórios';
-    } else if (password.length < 8) {
-      newErrors.password = 'A senha deve conter no mínimo 8 caracteres';
-    }
-    if (password !== confirmPassword) {
-      newErrors.confirmPassword = 'As senhas não coincidem';
-    }
+    const nameError = validateRequired(name);
+    if (nameError) newErrors.name = nameError;
+
+    const emailError = validateEmail(email);
+    if (emailError) newErrors.email = emailError;
+
+    const passwordError = validatePassword(password);
+    if (passwordError) newErrors.password = passwordError;
+
+    const confirmError = validatePasswordsMatch(password, confirmPassword);
+    if (confirmError) newErrors.confirmPassword = confirmError;
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -54,11 +60,11 @@ export const Register: React.FC<RegisterProps> = ({ onNavigate }) => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-950 flex items-center justify-center p-4">
       <Card className="w-full max-w-md">
         <div className="text-center mb-8">
           <img
-            src="/src/imports/Gemini_Generated_Image_91hvjp91hvjp91hv-removebg-preview.png"
+            src={logo}
             alt="SENNEX Logo"
             className="h-40 w-auto mx-auto"
           />
@@ -86,7 +92,7 @@ export const Register: React.FC<RegisterProps> = ({ onNavigate }) => {
           <Input
             label="Senha"
             type="password"
-            placeholder="Mínimo 8 caracteres"
+            placeholder="Mínimo 6 caracteres"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             error={errors.password}
@@ -107,11 +113,11 @@ export const Register: React.FC<RegisterProps> = ({ onNavigate }) => {
         </form>
 
         <div className="mt-6 text-center">
-          <p className="text-gray-600">
+          <p className="text-gray-600 dark:text-gray-400">
             Já tem uma conta?{' '}
             <button
               onClick={() => onNavigate('login')}
-              className="text-blue-600 hover:text-blue-700 font-medium"
+              className="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 font-medium"
             >
               Faça login
             </button>

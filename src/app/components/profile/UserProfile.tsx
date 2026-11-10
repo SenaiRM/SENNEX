@@ -5,9 +5,12 @@ import { Input } from '../ui/Input';
 import { User, Save, Lock } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '../../context/AuthContext';
+import { STORAGE_KEYS } from '../../lib/storage';
+import { validateEmail, validatePassword, validatePasswordsMatch } from '../../lib/validation';
+import { Ficha, UserRecord } from '../../types';
 
 export const UserProfile: React.FC = () => {
-  const { user } = useAuth();
+  const { user, updateUser } = useAuth();
   const [formData, setFormData] = useState({
     name: '',
     surname: '',
@@ -20,8 +23,8 @@ export const UserProfile: React.FC = () => {
   });
 
   useEffect(() => {
-    const fichas = JSON.parse(localStorage.getItem('sennex_fichas') || '[]');
-    const userFicha = fichas.find((f: any) => f.userId === user?.id);
+    const fichas: Ficha[] = JSON.parse(localStorage.getItem(STORAGE_KEYS.FICHAS) || '[]');
+    const userFicha = fichas.find((f) => f.userId === user?.id);
 
     if (userFicha) {
       setFormData({
@@ -44,17 +47,17 @@ export const UserProfile: React.FC = () => {
       return;
     }
 
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(formData.email)) {
-      toast.error('E-mail inválido');
+    const emailError = validateEmail(formData.email);
+    if (emailError) {
+      toast.error(emailError);
       return;
     }
 
-    const fichas = JSON.parse(localStorage.getItem('sennex_fichas') || '[]');
-    const userFichaIndex = fichas.findIndex((f: any) => f.userId === user?.id);
+    const fichas: Ficha[] = JSON.parse(localStorage.getItem(STORAGE_KEYS.FICHAS) || '[]');
+    const userFichaIndex = fichas.findIndex((f) => f.userId === user?.id);
 
-    const userData = {
-      userId: user?.id,
+    const userData: Ficha = {
+      userId: user?.id || '',
       name: formData.name,
       surname: formData.surname,
       email: formData.email
@@ -66,7 +69,8 @@ export const UserProfile: React.FC = () => {
       fichas.push(userData);
     }
 
-    localStorage.setItem('sennex_fichas', JSON.stringify(fichas));
+    localStorage.setItem(STORAGE_KEYS.FICHAS, JSON.stringify(fichas));
+    updateUser({ name: `${formData.name} ${formData.surname}`.trim(), email: formData.email });
     toast.success('Dados atualizados com sucesso');
   };
 
@@ -76,18 +80,19 @@ export const UserProfile: React.FC = () => {
       return;
     }
 
-    if (passwordData.newPassword.length < 6) {
-      toast.error('A nova senha deve ter no mínimo 6 caracteres');
+    const passwordError = validatePassword(passwordData.newPassword);
+    if (passwordError) {
+      toast.error(passwordError);
       return;
     }
 
-    if (passwordData.newPassword !== passwordData.confirmPassword) {
+    if (validatePasswordsMatch(passwordData.newPassword, passwordData.confirmPassword)) {
       toast.error('As senhas não coincidem');
       return;
     }
 
-    const users = JSON.parse(localStorage.getItem('sennex_users') || '[]');
-    const userIndex = users.findIndex((u: any) => u.id === user?.id);
+    const users: UserRecord[] = JSON.parse(localStorage.getItem(STORAGE_KEYS.USERS) || '[]');
+    const userIndex = users.findIndex((u) => u.id === user?.id);
 
     if (userIndex === -1) {
       toast.error('Usuário não encontrado');
@@ -100,7 +105,7 @@ export const UserProfile: React.FC = () => {
     }
 
     users[userIndex].password = passwordData.newPassword;
-    localStorage.setItem('sennex_users', JSON.stringify(users));
+    localStorage.setItem(STORAGE_KEYS.USERS, JSON.stringify(users));
 
     setPasswordData({
       currentPassword: '',
@@ -112,19 +117,19 @@ export const UserProfile: React.FC = () => {
   };
 
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-6 lg:p-8">
       <div className="max-w-2xl mx-auto">
         <div className="mb-6">
-          <h1 className="text-3xl font-bold text-gray-900">Meu Perfil</h1>
-          <p className="text-gray-600 mt-1">Gerencie suas informações pessoais</p>
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-gray-100">Meu Perfil</h1>
+          <p className="text-gray-600 dark:text-gray-400 mt-1">Gerencie suas informações pessoais</p>
         </div>
 
         <Card className="mb-6">
           <div className="flex items-center space-x-3 mb-6">
-            <div className="bg-blue-100 p-3 rounded-lg">
-              <User size={24} className="text-blue-600" />
+            <div className="bg-blue-100 dark:bg-blue-900/40 p-3 rounded-lg">
+              <User size={24} className="text-blue-600 dark:text-blue-400" />
             </div>
-            <h2 className="text-xl font-bold text-gray-900">Dados Pessoais</h2>
+            <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">Dados Pessoais</h2>
           </div>
 
           <div className="space-y-4">
@@ -161,10 +166,10 @@ export const UserProfile: React.FC = () => {
 
         <Card>
           <div className="flex items-center space-x-3 mb-6">
-            <div className="bg-blue-100 p-3 rounded-lg">
-              <Lock size={24} className="text-blue-600" />
+            <div className="bg-blue-100 dark:bg-blue-900/40 p-3 rounded-lg">
+              <Lock size={24} className="text-blue-600 dark:text-blue-400" />
             </div>
-            <h2 className="text-xl font-bold text-gray-900">Alterar Senha</h2>
+            <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">Alterar Senha</h2>
           </div>
 
           <div className="space-y-4">

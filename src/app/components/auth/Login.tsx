@@ -4,6 +4,8 @@ import { Input } from '../ui/Input';
 import { Button } from '../ui/Button';
 import { Card } from '../ui/Card';
 import { toast } from 'sonner';
+import logo from '../../assets/logo';
+import { validateEmail, validateRequired } from '../../lib/validation';
 
 interface LoginProps {
   onNavigate: (route: string) => void;
@@ -18,15 +20,11 @@ export const Login: React.FC<LoginProps> = ({ onNavigate }) => {
   const validate = () => {
     const newErrors: { email?: string; password?: string } = {};
 
-    if (!email) {
-      newErrors.email = 'Preencha todos os campos obrigatórios';
-    } else if (!/\S+@\S+\.\S+/.test(email)) {
-      newErrors.email = 'E-mail inválido';
-    }
+    const emailError = validateEmail(email);
+    if (emailError) newErrors.email = emailError;
 
-    if (!password) {
-      newErrors.password = 'Preencha todos os campos obrigatórios';
-    }
+    const passwordError = validateRequired(password);
+    if (passwordError) newErrors.password = passwordError;
 
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -47,11 +45,11 @@ export const Login: React.FC<LoginProps> = ({ onNavigate }) => {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-950 flex items-center justify-center p-4">
       <Card className="w-full max-w-md">
         <div className="text-center mb-2.5">
           <img
-            src="/src/imports/Gemini_Generated_Image_91hvjp91hvjp91hv-removebg-preview.png"
+            src={logo}
             alt="SENNEX Logo"
             className="h-52 w-auto mx-auto"
           />
@@ -80,7 +78,7 @@ export const Login: React.FC<LoginProps> = ({ onNavigate }) => {
             <button
               type="button"
               onClick={() => onNavigate('forgot-password')}
-              className="text-sm text-blue-600 hover:text-blue-700"
+              className="text-sm text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
             >
               Esqueceu a senha?
             </button>
@@ -92,11 +90,11 @@ export const Login: React.FC<LoginProps> = ({ onNavigate }) => {
         </form>
 
         <div className="mt-6 text-center">
-          <p className="text-gray-600">
+          <p className="text-gray-600 dark:text-gray-400">
             Não tem uma conta?{' '}
             <button
               onClick={() => onNavigate('register')}
-              className="text-blue-600 hover:text-blue-700 font-medium"
+              className="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 font-medium"
             >
               Cadastre-se
             </button>

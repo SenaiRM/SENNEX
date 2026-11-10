@@ -1,7 +1,7 @@
 
-  # VERSÃO VALENDO
+  # SENNEX
 
-  This is a code bundle for VERSÃO VALENDO. The original project is available at https://www.figma.com/design/HbIaWVqyIuhtd9pfux13a4/VERS%C3%83O-VALENDO.
+  MVP de um sistema web/app responsivo para gerenciamento de usuários, medicamentos e notificações de saúde.
 
   ## Running the code
 

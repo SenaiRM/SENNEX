@@ -1,208 +1,164 @@
 import React, { useState } from 'react';
 import { Card } from '../ui/Card';
 import { Button } from '../ui/Button';
-import { Download, FileText, User, Pill, AlertCircle } from 'lucide-react';
+import { Input } from '../ui/Input';
+import { Download, FileText, User, Pill, AlertCircle, CheckCircle, Filter, Syringe, Stethoscope } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '../../context/AuthContext';
-import { jsPDF } from 'jspdf';
+import { STORAGE_KEYS } from '../../lib/storage';
+import { normalizePreferences } from '../../lib/utils';
+import { formatSchedule, getTreatmentEndDate } from '../../lib/medications';
+import { buildPatientReport } from '../../lib/pdfTemplate';
+import { sortConsultations } from '../../lib/consultations';
+import { ConsultationRecord, Ficha, Medication, NotificationItem, TakenMed, VaccineRecord } from '../../types';
+
+type SectionKey = 'medications' | 'preferences' | 'vaccines' | 'consultations' | 'taken' | 'history';
+
+const SECTIONS: { key: SectionKey; label: string }[] = [
+  { key: 'medications', label: 'Medicamentos' },
+  { key: 'preferences', label: 'Preferências Médicas' },
+  { key: 'vaccines', label: 'Cartão de Vacina' },
+  { key: 'consultations', label: 'Histórico de Consultas' },
+  { key: 'taken', label: 'Doses Tomadas' },
+  { key: 'history', label: 'Histórico de Notificações' }
+];
+
+const PERIOD_PRESETS = [7, 15, 30, 90];
+
+function toLocalISODate(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function daysAgo(days: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() - (days - 1));
+  return toLocalISODate(date);
+}
+
+function formatDateBR(isoDate: string): string {
+  return new Date(isoDate + 'T00:00:00').toLocaleDateString('pt-BR');
+}
+
+/** Data (YYYY-MM-DD) da notificação, extraída de `time` (dd/mm/aaaa, hh:mm:ss) ou de `date`. */
+function getNotificationDate(notif: NotificationItem): string | undefined {
+  const match = notif.time?.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (match) return `${match[3]}-${match[2]}-${match[1]}`;
+  return notif.date;
+}
 
 export const PDFGenerator: React.FC = () => {
   const { user } = useAuth();
   const [generating, setGenerating] = useState(false);
+  const [startDate, setStartDate] = useState(daysAgo(30));
+  const [endDate, setEndDate] = useState(toLocalISODate(new Date()));
+  const [sections, setSections] = useState<Record<SectionKey, boolean>>({
+    medications: true,
+    preferences: true,
+    vaccines: true,
+    consultations: true,
+    taken: true,
+    history: true
+  });
+
+  const isInPeriod = (date: string | undefined) => {
+    if (!date) return !startDate && !endDate;
+    return (!startDate || date >= startDate) && (!endDate || date <= endDate);
+  };
+
+  const fichas: Ficha[] = JSON.parse(localStorage.getItem(STORAGE_KEYS.FICHAS) || '[]');
+  const userFicha = fichas.find((f) => f.userId === user?.id);
+
+  const medications: Medication[] = JSON.parse(localStorage.getItem(STORAGE_KEYS.MEDICATIONS) || '[]');
+  // Medicamentos cujo tratamento se sobrepõe ao período escolhido
+  const userMedications = medications.filter((m) => {
+    const treatmentEnd = getTreatmentEndDate(m);
+    return (
+      m.userId === user?.id &&
+      (!m.startDate || !endDate || m.startDate <= endDate) &&
+      (!treatmentEnd || !startDate || treatmentEnd >= startDate)
+    );
+  });
+
+  const storedPreferences = JSON.parse(localStorage.getItem(STORAGE_KEYS.MEDICAL_PREFERENCES) || '{}');
+  const userPreferences = normalizePreferences(storedPreferences[user?.id || '']);
+  const hasPreferences =
+    userPreferences.foodRestrictions.length > 0 ||
+    userPreferences.medicalRestrictions.length > 0 ||
+    userPreferences.allergies.length > 0;
+
+  // O cartão de vacina sai completo, sem filtro de período: é um histórico de imunização
+  const vaccines: VaccineRecord[] = JSON.parse(localStorage.getItem(STORAGE_KEYS.VACCINES) || '[]');
+  const userVaccines = vaccines
+    .filter((v) => v.userId === user?.id)
+    .sort((a, b) => b.applicationDate.localeCompare(a.applicationDate));
+
+  const consultations: ConsultationRecord[] = JSON.parse(localStorage.getItem(STORAGE_KEYS.CONSULTATIONS) || '[]');
+  const userConsultations = sortConsultations(
+    consultations.filter((c) => c.userId === user?.id && isInPeriod(c.date))
+  );
+
+  const takenMeds: TakenMed[] = JSON.parse(localStorage.getItem(STORAGE_KEYS.TAKEN_MEDS) || '[]');
+  const userTakenMeds = takenMeds
+    .filter((t) => t.userId === user?.id && isInPeriod(t.date))
+    .sort((a, b) => `${b.date} ${b.time}`.localeCompare(`${a.date} ${a.time}`));
+
+  const notifications: NotificationItem[] = JSON.parse(localStorage.getItem(STORAGE_KEYS.NOTIFICATIONS) || '[]');
+  const userNotifications = notifications
+    .filter((n) => n.userId === user?.id && isInPeriod(getNotificationDate(n)))
+    .reverse();
+
+  const periodLabel =
+    startDate || endDate
+      ? `${startDate ? formatDateBR(startDate) : 'início'} a ${endDate ? formatDateBR(endDate) : 'hoje'}`
+      : 'Todo o período';
+
+  const selectedCount = Object.values(sections).filter(Boolean).length;
+
+  const toggleSection = (key: SectionKey) => {
+    setSections((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const applyPreset = (days: number | null) => {
+    if (days === null) {
+      setStartDate('');
+      setEndDate('');
+    } else {
+      setStartDate(daysAgo(days));
+      setEndDate(toLocalISODate(new Date()));
+    }
+  };
+
+  const isPresetActive = (days: number | null) =>
+    days === null
+      ? !startDate && !endDate
+      : startDate === daysAgo(days) && endDate === toLocalISODate(new Date());
 
   const generatePDF = () => {
-    setGenerating(true);
-
-    const fichas = JSON.parse(localStorage.getItem('sennex_fichas') || '[]');
-    const userFicha = fichas.find((f: any) => f.userId === user?.id);
-
-    const medications = JSON.parse(localStorage.getItem('sennex_medications') || '[]');
-    const userMedications = medications.filter((m: any) => m.userId === user?.id);
-
-    const preferences = JSON.parse(localStorage.getItem('sennex_medical_preferences') || '{}');
-    const userPreferences = preferences[user?.id || ''];
-
-    const notifications = JSON.parse(localStorage.getItem('sennex_notifications') || '[]');
-    const userNotifications = notifications.filter((n: any) => n.userId === user?.id);
-
-    if (!userFicha && userMedications.length === 0) {
-      setGenerating(false);
-      toast.error('Não há dados para gerar o PDF');
+    if (selectedCount === 0) {
+      toast.error('Selecione ao menos uma informação para exportar');
       return;
     }
 
+    if (startDate && endDate && startDate > endDate) {
+      toast.error('A data inicial deve ser anterior à data final');
+      return;
+    }
+
+    setGenerating(true);
+
     setTimeout(() => {
-      const doc = new jsPDF();
-      let yPos = 20;
-
-      doc.setFontSize(20);
-      doc.text('SENNEX - FICHA DO PACIENTE', 105, yPos, { align: 'center' });
-      yPos += 15;
-
-      doc.setFontSize(10);
-      doc.setTextColor(100);
-      doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, 105, yPos, { align: 'center' });
-      yPos += 15;
-
-      doc.setFontSize(14);
-      doc.setTextColor(0);
-      doc.text('DADOS PESSOAIS', 20, yPos);
-      yPos += 10;
-
-      doc.setFontSize(11);
-      doc.text(`Nome: ${userFicha?.name || ''} ${userFicha?.surname || ''}`, 20, yPos);
-      yPos += 7;
-      doc.text(`E-mail: ${userFicha?.email || ''}`, 20, yPos);
-      yPos += 15;
-
-      doc.setFontSize(14);
-      doc.text(`MEDICAMENTOS (${userMedications.length})`, 20, yPos);
-      yPos += 10;
-
-      if (userMedications.length === 0) {
-        doc.setFontSize(11);
-        doc.setTextColor(100);
-        doc.text('Nenhum medicamento cadastrado', 20, yPos);
-        yPos += 10;
-      } else {
-        doc.setFontSize(11);
-        doc.setTextColor(0);
-        userMedications.forEach((med: any, index: number) => {
-          if (yPos > 270) {
-            doc.addPage();
-            yPos = 20;
-          }
-          doc.text(`${index + 1}. ${med.name}`, 20, yPos);
-          yPos += 7;
-          doc.text(`   Dosagem: ${med.dosage} | Tipo: ${med.type} | Horário: ${med.time}`, 20, yPos);
-          yPos += 7;
-          if (med.startDate) {
-            const startDate = new Date(med.startDate + 'T00:00:00').toLocaleDateString('pt-BR');
-            doc.text(`   Início do Tratamento: ${startDate}`, 20, yPos);
-            yPos += 7;
-          }
-          if (med.recurrence && med.recurrence.length > 0) {
-            doc.text(`   Dias: ${med.recurrence.join(', ').toUpperCase()}`, 20, yPos);
-            yPos += 7;
-          }
-          yPos += 3;
-        });
-      }
-
-      yPos += 5;
-
-      if (yPos > 250) {
-        doc.addPage();
-        yPos = 20;
-      }
-
-      doc.setFontSize(14);
-      doc.text('PREFERÊNCIAS MÉDICAS', 20, yPos);
-      yPos += 10;
-
-      doc.setFontSize(11);
-      const foodRestrictions = Array.isArray(userPreferences?.foodRestrictions)
-        ? userPreferences.foodRestrictions
-        : (userPreferences?.foodRestrictions ? [userPreferences.foodRestrictions] : []);
-
-      const medicalRestrictions = Array.isArray(userPreferences?.medicalRestrictions)
-        ? userPreferences.medicalRestrictions
-        : (userPreferences?.medicalRestrictions ? [userPreferences.medicalRestrictions] : []);
-
-      const allergies = Array.isArray(userPreferences?.allergies)
-        ? userPreferences.allergies
-        : (userPreferences?.allergies ? [userPreferences.allergies] : []);
-
-      if (foodRestrictions.length > 0) {
-        doc.text('Restrições Alimentares:', 20, yPos);
-        yPos += 7;
-        foodRestrictions.forEach((item: string) => {
-          if (yPos > 270) {
-            doc.addPage();
-            yPos = 20;
-          }
-          doc.text(`- ${item}`, 20, yPos);
-          yPos += 7;
-        });
-        yPos += 3;
-      }
-
-      if (yPos > 250) {
-        doc.addPage();
-        yPos = 20;
-      }
-
-      if (medicalRestrictions.length > 0) {
-        doc.text('Restrições Médicas:', 20, yPos);
-        yPos += 7;
-        medicalRestrictions.forEach((item: string) => {
-          if (yPos > 270) {
-            doc.addPage();
-            yPos = 20;
-          }
-          doc.text(`- ${item}`, 20, yPos);
-          yPos += 7;
-        });
-        yPos += 3;
-      }
-
-      if (yPos > 250) {
-        doc.addPage();
-        yPos = 20;
-      }
-
-      if (allergies.length > 0) {
-        doc.text('Alergias:', 20, yPos);
-        yPos += 7;
-        allergies.forEach((item: string) => {
-          if (yPos > 270) {
-            doc.addPage();
-            yPos = 20;
-          }
-          doc.text(`- ${item}`, 20, yPos);
-          yPos += 7;
-        });
-        yPos += 3;
-      }
-
-      if (foodRestrictions.length === 0 && medicalRestrictions.length === 0 && allergies.length === 0) {
-        doc.setTextColor(100);
-        doc.text('Nenhuma preferência médica cadastrada', 20, yPos);
-        yPos += 10;
-        doc.setTextColor(0);
-      }
-
-      yPos += 5;
-
-      if (yPos > 240) {
-        doc.addPage();
-        yPos = 20;
-      }
-
-      doc.setFontSize(14);
-      doc.text(`HISTÓRICO RECENTE (${userNotifications.length} notificações)`, 20, yPos);
-      yPos += 10;
-
-      doc.setFontSize(11);
-      if (userNotifications.length === 0) {
-        doc.setTextColor(100);
-        doc.text('Nenhuma notificação registrada', 20, yPos);
-      } else {
-        const recentNotifications = userNotifications.slice(0, 5);
-        recentNotifications.forEach((notif: any, index: number) => {
-          if (yPos > 270) {
-            doc.addPage();
-            yPos = 20;
-          }
-          doc.setTextColor(0);
-          doc.text(`${index + 1}. ${notif.message}`, 20, yPos);
-          yPos += 7;
-          doc.setTextColor(100);
-          doc.text(`   ${notif.time}`, 20, yPos);
-          doc.setTextColor(0);
-          yPos += 10;
-        });
-      }
+      const doc = buildPatientReport({
+        patientName: `${userFicha?.name || user?.name || ''} ${userFicha?.surname || ''}`.trim(),
+        email: userFicha?.email || user?.email || '',
+        periodLabel,
+        generatedAt: new Date(),
+        medications: sections.medications ? userMedications : undefined,
+        preferences: sections.preferences ? userPreferences : undefined,
+        vaccines: sections.vaccines ? userVaccines : undefined,
+        consultations: sections.consultations ? userConsultations : undefined,
+        taken: sections.taken ? userTakenMeds : undefined,
+        notifications: sections.history ? userNotifications : undefined
+      });
 
       const fileName = `ficha-paciente-${user?.name?.replace(/\s+/g, '-') || 'sennex'}.pdf`;
       doc.save(fileName);
@@ -212,142 +168,218 @@ export const PDFGenerator: React.FC = () => {
     }, 1500);
   };
 
-  const fichas = JSON.parse(localStorage.getItem('sennex_fichas') || '[]');
-  const userFicha = fichas.find((f: any) => f.userId === user?.id);
-
-  const medications = JSON.parse(localStorage.getItem('sennex_medications') || '[]');
-  const userMedications = medications.filter((m: any) => m.userId === user?.id);
-
-  const preferences = JSON.parse(localStorage.getItem('sennex_medical_preferences') || '{}');
-  const userPreferences = preferences[user?.id || ''];
-
-  const notifications = JSON.parse(localStorage.getItem('sennex_notifications') || '[]');
-  const userNotifications = notifications.filter((n: any) => n.userId === user?.id);
-
   return (
-    <div className="p-8">
+    <div className="p-4 sm:p-6 lg:p-8">
       <div className="max-w-3xl mx-auto">
         <div className="mb-6">
-          <h1 className="text-3xl font-bold text-gray-900">Gerar PDF</h1>
-          <p className="text-gray-600 mt-1">Exporte sua ficha completa em PDF</p>
+          <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-gray-100">Gerar PDF</h1>
+          <p className="text-gray-600 dark:text-gray-400 mt-1">Exporte sua ficha completa em PDF</p>
         </div>
+
+        <Card className="mb-6">
+          <div className="flex items-center space-x-3 mb-6">
+            <div className="bg-blue-100 dark:bg-blue-900/40 p-3 rounded-lg">
+              <Filter size={24} className="text-blue-600 dark:text-blue-400" />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">Filtros de Exportação</h2>
+              <p className="text-sm text-gray-600 dark:text-gray-400">
+                Escolha o período e as informações que deseja exportar
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-6">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Período</label>
+              <div className="flex flex-wrap gap-2 mb-3">
+                {PERIOD_PRESETS.map((days) => (
+                  <button
+                    key={days}
+                    type="button"
+                    onClick={() => applyPreset(days)}
+                    className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                      isPresetActive(days)
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'
+                    }`}
+                  >
+                    Últimos {days} dias
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => applyPreset(null)}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                    isPresetActive(null)
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'
+                  }`}
+                >
+                  Todo o período
+                </button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Input
+                  label="Data inicial"
+                  type="date"
+                  value={startDate}
+                  max={endDate || undefined}
+                  onChange={(e) => setStartDate(e.target.value)}
+                />
+                <Input
+                  label="Data final"
+                  type="date"
+                  value={endDate}
+                  min={startDate || undefined}
+                  onChange={(e) => setEndDate(e.target.value)}
+                />
+              </div>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mt-1.5">
+                O período filtra as consultas, as doses tomadas, o histórico de notificações e os medicamentos
+                em tratamento dentro do intervalo. O cartão de vacina é exportado com o histórico completo
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Informações a exportar
+              </label>
+              <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">
+                Os dados pessoais são incluídos em todos os relatórios
+              </p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {SECTIONS.map(({ key, label }) => (
+                  <label
+                    key={key}
+                    className="flex items-center space-x-2 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800 text-sm text-gray-700 dark:text-gray-300"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={sections[key]}
+                      onChange={() => toggleSection(key)}
+                      className="w-4 h-4 accent-blue-600"
+                    />
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          </div>
+        </Card>
 
         <Card className="mb-6">
           <div className="flex items-center justify-between mb-6">
             <div className="flex items-center space-x-3">
-              <div className="bg-blue-100 p-3 rounded-lg">
-                <FileText size={24} className="text-blue-600" />
+              <div className="bg-blue-100 dark:bg-blue-900/40 p-3 rounded-lg">
+                <FileText size={24} className="text-blue-600 dark:text-blue-400" />
               </div>
               <div>
-                <h2 className="text-xl font-bold text-gray-900">Prévia do Documento</h2>
-                <p className="text-sm text-gray-600">
-                  Confira os dados que serão incluídos no PDF
+                <h2 className="text-xl font-bold text-gray-900 dark:text-gray-100">Prévia do Documento</h2>
+                <p className="text-sm text-gray-600 dark:text-gray-400">
+                  Período: {periodLabel}
                 </p>
               </div>
             </div>
           </div>
 
-          <div className="space-y-6">
-            <div className="pb-4 border-b border-gray-200">
+          <div className="space-y-6 [&>*:not(:last-child)]:pb-4 [&>*:not(:last-child)]:border-b [&>*:not(:last-child)]:border-gray-200 dark:[&>*:not(:last-child)]:border-gray-700">
+            <div>
               <div className="flex items-center space-x-2 mb-3">
-                <User size={18} className="text-blue-600" />
-                <h3 className="font-bold text-gray-900">Dados Pessoais</h3>
+                <User size={18} className="text-blue-600 dark:text-blue-400" />
+                <h3 className="font-bold text-gray-900 dark:text-gray-100">Dados Pessoais</h3>
               </div>
               {userFicha ? (
-                <div className="ml-6 space-y-1 text-sm text-gray-600">
+                <div className="ml-6 space-y-1 text-sm text-gray-600 dark:text-gray-400">
                   <p>
                     Nome: {userFicha.name} {userFicha.surname}
                   </p>
                   <p>E-mail: {userFicha.email}</p>
                 </div>
               ) : (
-                <p className="ml-6 text-sm text-gray-500">Sem dados cadastrados</p>
+                <p className="ml-6 text-sm text-gray-500 dark:text-gray-400">Sem dados cadastrados</p>
               )}
             </div>
 
-            <div className="pb-4 border-b border-gray-200">
-              <div className="flex items-center space-x-2 mb-3">
-                <Pill size={18} className="text-blue-600" />
-                <h3 className="font-bold text-gray-900">
-                  Medicamentos ({userMedications.length})
-                </h3>
-              </div>
-              {userMedications.length > 0 ? (
-                <div className="ml-6 space-y-2">
-                  {userMedications.slice(0, 3).map((med: any) => (
-                    <div key={med.id} className="text-sm text-gray-600">
-                      <p className="font-medium text-gray-900">{med.name}</p>
-                      <p>
-                        {med.dosage} - {med.type} - {med.time}
-                      </p>
-                      {med.startDate && (
-                        <p className="text-xs text-gray-500">
-                          Início: {new Date(med.startDate + 'T00:00:00').toLocaleDateString('pt-BR')}
-                        </p>
-                      )}
-                      {med.recurrence && med.recurrence.length > 0 && (
-                        <p className="text-xs text-blue-600">
-                          Dias: {med.recurrence.join(', ').toUpperCase()}
-                        </p>
-                      )}
-                    </div>
-                  ))}
-                  {userMedications.length > 3 && (
-                    <p className="text-sm text-gray-500">
-                      +{userMedications.length - 3} medicamentos
-                    </p>
-                  )}
+            {selectedCount === 0 && (
+              <p className="text-center text-sm text-gray-500 dark:text-gray-400 py-4">
+                Selecione ao menos uma informação para exportar
+              </p>
+            )}
+
+            {sections.medications && (
+              <div>
+                <div className="flex items-center space-x-2 mb-3">
+                  <Pill size={18} className="text-blue-600 dark:text-blue-400" />
+                  <h3 className="font-bold text-gray-900 dark:text-gray-100">
+                    Medicamentos ({userMedications.length})
+                  </h3>
                 </div>
-              ) : (
-                <p className="ml-6 text-sm text-gray-500">Nenhum medicamento cadastrado</p>
-              )}
-            </div>
-
-            <div className="pb-4 border-b border-gray-200">
-              <div className="flex items-center space-x-2 mb-3">
-                <AlertCircle size={18} className="text-blue-600" />
-                <h3 className="font-bold text-gray-900">Preferências Médicas</h3>
+                {userMedications.length > 0 ? (
+                  <div className="ml-6 space-y-2">
+                    {userMedications.slice(0, 3).map((med) => (
+                      <div key={med.id} className="text-sm text-gray-600 dark:text-gray-400">
+                        <p className="font-medium text-gray-900 dark:text-gray-100">{med.name}</p>
+                        <p>
+                          {med.dosage} - {med.type} - {formatSchedule(med)}
+                        </p>
+                        {med.startDate && (
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                            Início: {formatDateBR(med.startDate)}
+                          </p>
+                        )}
+                        {med.recurrence && med.recurrence.length > 0 && (
+                          <p className="text-xs text-blue-600 dark:text-blue-400">
+                            Dias: {med.recurrence.join(', ').toUpperCase()}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                    {userMedications.length > 3 && (
+                      <p className="text-sm text-gray-500 dark:text-gray-400">
+                        +{userMedications.length - 3} medicamentos
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="ml-6 text-sm text-gray-500 dark:text-gray-400">Nenhum medicamento no período</p>
+                )}
               </div>
-              {(() => {
-                const foodRestrictions = Array.isArray(userPreferences?.foodRestrictions)
-                  ? userPreferences.foodRestrictions
-                  : (userPreferences?.foodRestrictions ? [userPreferences.foodRestrictions] : []);
-                const medicalRestrictions = Array.isArray(userPreferences?.medicalRestrictions)
-                  ? userPreferences.medicalRestrictions
-                  : (userPreferences?.medicalRestrictions ? [userPreferences.medicalRestrictions] : []);
-                const allergies = Array.isArray(userPreferences?.allergies)
-                  ? userPreferences.allergies
-                  : (userPreferences?.allergies ? [userPreferences.allergies] : []);
+            )}
 
-                const hasData = foodRestrictions.length > 0 || medicalRestrictions.length > 0 || allergies.length > 0;
-
-                return hasData ? (
-                  <div className="ml-6 space-y-2 text-sm text-gray-600">
-                    {foodRestrictions.length > 0 && (
+            {sections.preferences && (
+              <div>
+                <div className="flex items-center space-x-2 mb-3">
+                  <AlertCircle size={18} className="text-blue-600 dark:text-blue-400" />
+                  <h3 className="font-bold text-gray-900 dark:text-gray-100">Preferências Médicas</h3>
+                </div>
+                {hasPreferences ? (
+                  <div className="ml-6 space-y-2 text-sm text-gray-600 dark:text-gray-400">
+                    {userPreferences.foodRestrictions.length > 0 && (
                       <div>
-                        <p className="font-medium text-gray-900">Restrições Alimentares:</p>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">Restrições Alimentares:</p>
                         <ul className="list-disc list-inside">
-                          {foodRestrictions.map((item: string, idx: number) => (
+                          {userPreferences.foodRestrictions.map((item, idx) => (
                             <li key={idx}>{item}</li>
                           ))}
                         </ul>
                       </div>
                     )}
-                    {medicalRestrictions.length > 0 && (
+                    {userPreferences.medicalRestrictions.length > 0 && (
                       <div>
-                        <p className="font-medium text-gray-900">Restrições Médicas:</p>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">Restrições Médicas:</p>
                         <ul className="list-disc list-inside">
-                          {medicalRestrictions.map((item: string, idx: number) => (
+                          {userPreferences.medicalRestrictions.map((item, idx) => (
                             <li key={idx}>{item}</li>
                           ))}
                         </ul>
                       </div>
                     )}
-                    {allergies.length > 0 && (
+                    {userPreferences.allergies.length > 0 && (
                       <div>
-                        <p className="font-medium text-gray-900">Alergias:</p>
+                        <p className="font-medium text-gray-900 dark:text-gray-100">Alergias:</p>
                         <ul className="list-disc list-inside">
-                          {allergies.map((item: string, idx: number) => (
+                          {userPreferences.allergies.map((item, idx) => (
                             <li key={idx}>{item}</li>
                           ))}
                         </ul>
@@ -355,32 +387,111 @@ export const PDFGenerator: React.FC = () => {
                     )}
                   </div>
                 ) : (
-                  <p className="ml-6 text-sm text-gray-500">Nenhuma preferência cadastrada</p>
-                );
-              })()}
-            </div>
-
-            <div>
-              <div className="flex items-center space-x-2 mb-3">
-                <FileText size={18} className="text-blue-600" />
-                <h3 className="font-bold text-gray-900">
-                  Histórico ({userNotifications.length} notificações)
-                </h3>
+                  <p className="ml-6 text-sm text-gray-500 dark:text-gray-400">Nenhuma preferência cadastrada</p>
+                )}
               </div>
-              {userNotifications.length > 0 ? (
-                <p className="ml-6 text-sm text-gray-600">
-                  Últimas {Math.min(5, userNotifications.length)} notificações incluídas
-                </p>
-              ) : (
-                <p className="ml-6 text-sm text-gray-500">Sem histórico</p>
-              )}
-            </div>
+            )}
+
+            {sections.vaccines && (
+              <div>
+                <div className="flex items-center space-x-2 mb-3">
+                  <Syringe size={18} className="text-blue-600 dark:text-blue-400" />
+                  <h3 className="font-bold text-gray-900 dark:text-gray-100">
+                    Cartão de Vacina ({userVaccines.length})
+                  </h3>
+                </div>
+                {userVaccines.length > 0 ? (
+                  <div className="ml-6 space-y-1 text-sm text-gray-600 dark:text-gray-400">
+                    {userVaccines.slice(0, 3).map((v) => (
+                      <p key={v.id}>
+                        {formatDateBR(v.applicationDate)} - {v.vaccine} ({v.dose})
+                        {v.lot ? ` - Lote ${v.lot}` : ''}
+                      </p>
+                    ))}
+                    {userVaccines.length > 3 && (
+                      <p className="text-gray-500 dark:text-gray-400">+{userVaccines.length - 3} vacinas</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="ml-6 text-sm text-gray-500 dark:text-gray-400">Nenhuma vacina registrada</p>
+                )}
+              </div>
+            )}
+
+            {sections.consultations && (
+              <div>
+                <div className="flex items-center space-x-2 mb-3">
+                  <Stethoscope size={18} className="text-blue-600 dark:text-blue-400" />
+                  <h3 className="font-bold text-gray-900 dark:text-gray-100">
+                    Histórico de Consultas ({userConsultations.length})
+                  </h3>
+                </div>
+                {userConsultations.length > 0 ? (
+                  <div className="ml-6 space-y-1 text-sm text-gray-600 dark:text-gray-400">
+                    {userConsultations.slice(0, 3).map((c) => (
+                      <p key={c.id}>
+                        {formatDateBR(c.date)} às {c.time} - {c.doctor} ({c.specialty})
+                      </p>
+                    ))}
+                    {userConsultations.length > 3 && (
+                      <p className="text-gray-500 dark:text-gray-400">+{userConsultations.length - 3} consultas</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="ml-6 text-sm text-gray-500 dark:text-gray-400">Nenhuma consulta no período</p>
+                )}
+              </div>
+            )}
+
+            {sections.taken && (
+              <div>
+                <div className="flex items-center space-x-2 mb-3">
+                  <CheckCircle size={18} className="text-blue-600 dark:text-blue-400" />
+                  <h3 className="font-bold text-gray-900 dark:text-gray-100">
+                    Doses Tomadas ({userTakenMeds.length})
+                  </h3>
+                </div>
+                {userTakenMeds.length > 0 ? (
+                  <div className="ml-6 space-y-1 text-sm text-gray-600 dark:text-gray-400">
+                    {userTakenMeds.slice(0, 3).map((taken) => (
+                      <p key={taken.id}>
+                        {formatDateBR(taken.date)} às {taken.time} - {taken.medName}
+                        {taken.doseTime ? ` (dose das ${taken.doseTime})` : ''}
+                      </p>
+                    ))}
+                    {userTakenMeds.length > 3 && (
+                      <p className="text-gray-500 dark:text-gray-400">+{userTakenMeds.length - 3} doses</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="ml-6 text-sm text-gray-500 dark:text-gray-400">Nenhuma dose registrada no período</p>
+                )}
+              </div>
+            )}
+
+            {sections.history && (
+              <div>
+                <div className="flex items-center space-x-2 mb-3">
+                  <FileText size={18} className="text-blue-600 dark:text-blue-400" />
+                  <h3 className="font-bold text-gray-900 dark:text-gray-100">
+                    Histórico ({userNotifications.length} notificações)
+                  </h3>
+                </div>
+                {userNotifications.length > 0 ? (
+                  <p className="ml-6 text-sm text-gray-600 dark:text-gray-400">
+                    {userNotifications.length} notificações do período serão incluídas
+                  </p>
+                ) : (
+                  <p className="ml-6 text-sm text-gray-500 dark:text-gray-400">Sem histórico no período</p>
+                )}
+              </div>
+            )}
           </div>
         </Card>
 
         <Button
           onClick={generatePDF}
-          disabled={generating}
+          disabled={generating || selectedCount === 0}
           className="w-full"
           size="lg"
         >
@@ -388,7 +499,7 @@ export const PDFGenerator: React.FC = () => {
           {generating ? 'Gerando PDF...' : 'Gerar e Baixar PDF'}
         </Button>
 
-        <p className="text-center text-sm text-gray-500 mt-4">
+        <p className="text-center text-sm text-gray-500 dark:text-gray-400 mt-4">
           O arquivo será baixado automaticamente após a geração
         </p>
       </div>
